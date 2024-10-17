@@ -1,0 +1,177 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+  hostmetrics:
+    collection_interval: 60s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.linux.memory.available:
+            enabled: true
+          system.memory.utilization:
+            enabled: true
+      disk:
+      network:
+      load:
+      filesystem:
+        include_virtual_filesystems: true
+        metrics:
+          system.filesystem.inodes.usage:
+            enabled: true
+          system.filesystem.usage:
+            enabled: true
+          system.filesystem.utilization:
+            enabled: true
+      paging:
+      processes:
+  prometheus:
+      config:
+        scrape_configs:
+          - job_name: 'prom-metrics-collector'
+            scrape_interval: 60s
+            static_configs:
+              - targets: ['0.0.0.0:9464']
+
+  filelog/http_server:
+    include: [ '/home/ubuntu/Boomi_AtomSphere/Atom/*/logs/*shared_http_server.log' ]
+    operators:
+      - type: regex_parser
+        regex: '^(?<ipaddress>\d+\.\d+\.\d+.\d+) - (?<hostname>[^ ]*) \[(?<timestamp>[^\]]*)\] \"(?<request>[^\"]*)\" (?<status_code>[^ ]*) (?<msg>.*)$'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%d/%b/%Y:%H:%M:%S %z'
+        severity:
+          parse_from: attributes.status_code
+          mapping:
+            info:
+              - 1xx
+              - 2xx
+              - 3xx
+            warn:
+              - 4xx
+            error:
+              - 5xx
+    retry_on_failure:
+      enabled: true
+
+  filelog/container:
+    include: [ '/home/ubuntu/Boomi_AtomSphere/Atom/*/logs/*.container.log' ]
+    operators:
+      - type: regex_parser
+        regex: '^(?<timestamp>[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* [^ ]*) (?<loglevel>[^ ]*)[ ]*\[(?<javaprog>[^ ]*) (?<method>[^ ]*)\] (?<msg>.*)$'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%b %g, %Y %l:%M:%S %p %Z'
+        severity:
+          parse_from: attributes.loglevel
+          mapping:
+            info:
+              - INFO
+              - FINE
+              - fine
+            warn:
+              - WARNING
+              - warn
+            error:
+              - SEVERE
+              - error
+              - emergency
+    retry_on_failure:
+      enabled: true
+
+  filelog/execution:
+    include: [ '/home/ubuntu/Boomi_AtomSphere/Atom/*/execution/history/*/*/*.xml' ]
+    exclude: [ '/home/ubuntu/Boomi_AtomSphere/Atom/*/execution/history/*/*/metrics.xml' ]
+    multiline:
+      line_start_pattern: '\<LogEvent '
+    operators:
+      - type: regex_parser
+        regex: '<LogEvent\s+level="(?<loglevel>[^"]*)"\s+time="(?<timestamp>[^"]*)"\s+shapename="(?<shapename>[^"]*)"\s+shapetype="(?<shapetype>[^"]*)"\s+shapelabel="(?<shapelabel>[^"]*)"\s+shapeextendedinfo="(?<shapeextendedinfo>[^"]*)".*?>\s*<Message>(?<msg>[^<]*)<\/Message>\s*<\/LogEvent>'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%FT%T%z'
+        severity:
+          parse_from: attributes.loglevel
+          mapping:
+              info:
+                - INFO
+                - FINE
+                - fine
+              warn:
+                - WARNING
+                - warn
+              error:
+                - SEVERE
+                - error
+                - emergency
+
+    retry_on_failure:
+      enabled: true
+
+processors:
+  resource/os:
+    attributes:
+      - key: ostype
+        value: "linux"
+        action: upsert
+  resource/boomi:
+    attributes:
+      - key: host.name
+        value: "{{$ .Agent.host_name }}"
+        action: upsert
+  resource/apicalogs:
+    attributes:
+      - key: namespace
+        action: insert
+        value: "otlplogs"
+      - key: application
+        action: insert
+        value: "boomi"
+exporters:
+  debug:
+    verbosity: detailed
+  prometheus:
+    endpoint: 0.0.0.0:9464
+  apica/logs:
+    endpoint: "{{$ .Agent.secret.apicalogs.endpoint }}"
+    tls:
+      insecure: false
+      insecure_skip_verify: true
+    headers:
+      Authorization: "Bearer {{$ .Agent.secret.apicalogs.token }}"
+    sending_queue:
+      enabled: true
+      queue_size: 1_000_000
+    retry_on_failure:
+      enabled: true
+  prometheusremotewrite/apicametrics:
+    endpoint: "{{$ .Agent.secret.apicametrics.endpoint }}"
+    tls:
+      insecure: false
+      insecure_skip_verify: true
+    external_labels:
+      hostname: "{{$ .Agent.host_name }}"
+      ostype: "linux"
+    resource_to_telemetry_conversion:
+      enabled: true # Convert resource attributes to metric labels
+extensions:
+service:
+  extensions:
+  pipelines:
+    metrics:
+      receivers: [otlp,hostmetrics]
+      exporters: [prometheus]
+    metrics/out:
+      receivers: [prometheus]
+      processors: [resource/os,resource/boomi]
+      exporters: [prometheusremotewrite/apicametrics]
+    logs/out:
+      receivers: [filelog/http_server,filelog/container,filelog/execution]
+      processors: [resource/os,resource/boomi,resource/apicalogs]
+      exporters: [apica/logs]
