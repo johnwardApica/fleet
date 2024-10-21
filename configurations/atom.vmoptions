@@ -1,0 +1,9 @@
+-Xmx512m
+-Dsun.net.client.defaultConnectTimeout=120000
+-Dsun.net.client.defaultReadTimeout=120000
+-Dsun.net.http.retryPost=false
+-Dcom.boomi.container.securityCompatibility=2021.01
+-javaagent:{{$ .Agent.data.javaagent }}
+-Dotel.jmx.config={{$ .Agent.data.otel.jmx.config }}
+-Dotel.jmx.target.system=jetty,jvm,activemq
+-Dotel.service-name={{$ .Agent.host_name }}
